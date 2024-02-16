@@ -7,6 +7,23 @@
 
 #define INITIAL_ALLOC_SIZE 10
 #define INCREMENT_SIZE_MULTIPLE 2
+#define NO_PIPE -1
+
+void do_piping(int pipe_in, int pipe_out) {
+    if (pipe_in != NO_PIPE) {
+        if (dup2(pipe_in, 0) < 0) {
+            exit(1);
+        }
+        close(pipe_in);
+    }
+
+    if (pipe_out != NO_PIPE) {
+        if (dup2(pipe_out, 1) < 0) {
+            exit(1);
+        }
+        close(pipe_out);
+    }
+}
 
 int main(int argc, char *argv[])
 {
@@ -59,13 +76,14 @@ int main(int argc, char *argv[])
             token = strsep(&temp, "|");
         }
 
-        int pipefds[num_pipes - 1][2];
-        for (int i = 0; i < num_pipes; i++) {
+        int pipefds[num_pipes -1][2];
+        for (int i = 0; i < num_pipes - 1 ; i++) {
             if (pipe(pipefds[i]) == -1) {
                 exit(1);
             }
         }
         
+ 
         char **temp_commands = commands;
         for (int i = 0; i < num_pipes; i++) {
             char **args = malloc(INITIAL_ALLOC_SIZE * sizeof(char*));
@@ -86,30 +104,63 @@ int main(int argc, char *argv[])
             }
 
             args[num_args] = NULL;
-            for (int i = 0; i < num_args; i++){
-                printf("%sx\n", args[i]);
-            }
-
+//            for (int i = 0; i < num_args; i++){
+ //               printf("%sx\n", args[i]);
+  //          }
+  //
             int pid = fork();
-//            char *thing = NULL; 
+            if (pid == 0){
+                if (num_pipes - 1 > 0){
+                    if(i == 0){
+                        close(pipefds[i][0]);
+                        do_piping(NO_PIPE, pipefds[i][1]);
+                        close(pipefds[i][1]);
+                    }else if (i > 0 && i < num_pipes - 1) {
+                        close(pipefds[i-1][1]);
+                        close(pipefds[i][0]);
+                        do_piping(pipefds[i-1][0], pipefds[i][1]);
+                    }else if (i == num_pipes - 1) {
+                        close(pipefds[i-1][1]);
+                        do_piping(pipefds[i-1][0], NO_PIPE);
+                    }
+                }
+                execvp(args[0], args);
+            }else {
+                //need this otherwise parent still has pipfds[1] open if even first command exits
+                if (i > 0){
+                    close(pipefds[i-1][0]);
+                    close(pipefds[i-1][1]);
+                }
+            }
+            int status;
+            waitpid(pid, &status, 0);
+        }
+
+        for (int i = 0; i < num_pipes - 1; i++) {
+            close(pipefds[i][0]);
+            close(pipefds[i][1]);
+        }
+        //for (int i = 0; i < num_pipes; i++) {
+         //   wait(NULL);
+        //}
+/*
+            int pid = fork();
             if (pid < 0){
                 perror("fork failed");
                 exit(1);
             }else if (pid == 0) { //child
                 if (i > 0){
                     dup2(pipefds[i-1][0], 0);
-                    close(pipefds[i-1][0]);
+                    close(pipefds[i-1][1]);
                 }
                 if (i < num_pipes - 1) {
                     dup2(pipefds[i][1], 1);
                 }
- //               thing = args[0];
-                close(pipefds[i][0]);
-                close(pipefds[i][1]);
                 execvp(args[0], args);
             }
+            close(pipefds[i][1]);
+            close(pipefds[i][0]);
             free(args);
-            printf("looping again\n");
         }
 
         for (int i = 0; i < num_pipes - 1; i++) {
@@ -124,11 +175,12 @@ int main(int argc, char *argv[])
                 exit(1);
             }
         }
+
+*/
         free(string);
         free(commands);
     }
 }
-
 
 
 
