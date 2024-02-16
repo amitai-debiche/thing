@@ -8,18 +8,19 @@
 #define INITIAL_ALLOC_SIZE 10
 #define INCREMENT_SIZE_MULTIPLE 2
 #define NO_PIPE -1
+#define EXIT_FAIL -1
 
 void do_piping(int pipe_in, int pipe_out) {
     if (pipe_in != NO_PIPE) {
         if (dup2(pipe_in, 0) < 0) {
-            exit(1);
+            exit(EXIT_FAIL);
         }
         close(pipe_in);
     }
 
     if (pipe_out != NO_PIPE) {
         if (dup2(pipe_out, 1) < 0) {
-            exit(1);
+            exit(EXIT_FAIL);
         }
         close(pipe_out);
     }
@@ -32,7 +33,7 @@ int main(int argc, char *argv[])
         //handle script
     }
     else if (argc > 2) {
-        exit(1);
+        exit(EXIT_FAIL);
     }
 
 
@@ -50,8 +51,7 @@ int main(int argc, char *argv[])
         printf("wsh> ");
         input_read = getline(&string, &size, stdin);
         
-        //ASK LOUIS OFFICE HOURS, DO I WANT TO ALSO CHECK HERE FOR FEOF?
-        //AND RETURN SOME ERROR NOTICE IF -1 BUT NOT EOF
+        //eof input
         if (input_read == -1){
             printf("\n");
             free(string);
@@ -61,25 +61,25 @@ int main(int argc, char *argv[])
 
         char *temp = string;
 
-        token =  strsep(&temp, "|");
+        token = strsep(&temp, "|");
        
         while(token != NULL) {
             if (num_pipes >= max_pipes){
                 max_pipes *= INCREMENT_SIZE_MULTIPLE;
                 commands = realloc(commands, max_pipes * sizeof(char*));
                 if (!commands) {
-                    perror("Mem allocation failed");
-                    exit(1);
+                    exit(EXIT_FAIL);
                 }
             }
             commands[num_pipes++] = token;
             token = strsep(&temp, "|");
         }
+        commands[num_pipes] = NULL;
 
-        int pipefds[num_pipes -1][2];
+        int pipefds[num_pipes - 1][2];
         for (int i = 0; i < num_pipes - 1 ; i++) {
             if (pipe(pipefds[i]) == -1) {
-                exit(1);
+                exit(EXIT_FAIL);
             }
         }
         
@@ -95,19 +95,17 @@ int main(int argc, char *argv[])
                     max_args *= INCREMENT_SIZE_MULTIPLE;
                     args = realloc(args, max_args * sizeof(char*));
                     if (!args) {
-                        perror("Mem allocation failed");
-                        exit(1);
+                        exit(EXIT_FAIL);
                     }
                 }
-                args[num_args++] = command;
+                if (strcmp(command, "") != 0) {
+                    args[num_args++] = command;
+                }
+
                 command = strsep(&temp_commands[i], " ");
             }
 
             args[num_args] = NULL;
-//            for (int i = 0; i < num_args; i++){
- //               printf("%sx\n", args[i]);
-  //          }
-  //
             int pid = fork();
             if (pid == 0){
                 if (num_pipes - 1 > 0){
@@ -120,34 +118,31 @@ int main(int argc, char *argv[])
                         close(pipefds[i][0]);
                         do_piping(pipefds[i-1][0], pipefds[i][1]);
                     }else if (i == num_pipes - 1) {
-                        close(pipefds[i-1][1]);
                         do_piping(pipefds[i-1][0], NO_PIPE);
+                        close(pipefds[i-1][1]);
+                        close(pipefds[i-1][0]);
                     }
                 }
                 execvp(args[0], args);
             }else {
-                //need this otherwise parent still has pipfds[1] open if even first command exits
+                //need to close previous pipe, if have a new one
                 if (i > 0){
                     close(pipefds[i-1][0]);
                     close(pipefds[i-1][1]);
                 }
             }
-            int status;
-            waitpid(pid, &status, 0);
+            free(args);
         }
-
-        for (int i = 0; i < num_pipes - 1; i++) {
-            close(pipefds[i][0]);
-            close(pipefds[i][1]);
+        close(pipefds[num_pipes-1][0]);
+        close(pipefds[num_pipes-1][1]);
+        for (int i = 0; i < num_pipes; i++) {
+           wait(NULL);
         }
-        //for (int i = 0; i < num_pipes; i++) {
-         //   wait(NULL);
-        //}
 /*
             int pid = fork();
             if (pid < 0){
                 perror("fork failed");
-                exit(1);
+                exit(EXIT_FAIL);
             }else if (pid == 0) { //child
                 if (i > 0){
                     dup2(pipefds[i-1][0], 0);
@@ -172,7 +167,7 @@ int main(int argc, char *argv[])
             int status;
             int waitpid_rc = waitpid(-1, &status, 0);
             if (waitpid_rc == -1){
-                exit(1);
+                exit(EXIT_FAIL);
             }
         }
 
