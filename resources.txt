@@ -1,0 +1,4 @@
+hash function: http://www.cse.yorku.ca/~oz/hash.html
+
+Great article about hash tables in C, what I based my hash table off of:
+https://theleo.zone/posts/hashmap-in-c/
