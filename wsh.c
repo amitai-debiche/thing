@@ -9,6 +9,8 @@
 #define INCREMENT_SIZE_MULTIPLE 2
 #define NO_PIPE -1
 #define EXIT_FAIL -1
+#define LOAD_THRESHOLD .5
+#define DEFAULT_HIST_LENGTH 5
 
 
 void exit_command(char **args);
@@ -16,7 +18,7 @@ void cd_command(char **args);
 void export_command(char **args);
 void local_command(char **args);
 void vars_command(char **args);
-//void history_command(char **args);
+void history_command(char **args);
 
 
 char *builtin_commands[] = {
@@ -34,7 +36,7 @@ void (*builtin_functions[])(char **) = {
     &export_command,
     &local_command,
     &vars_command,
-//    &history_command
+    &history_command
 };
 
 int num_builtin_commands() {
@@ -49,6 +51,7 @@ int num_builtin_commands() {
 /////////////////////////////////////////////////////////////////////////////////
 
 typedef struct Entry {
+    int order;
     char *key;
     char *value;      //only storing string values here
     struct Entry *next;
@@ -59,7 +62,7 @@ typedef struct HashTable {
     int nBuckets;
 } HashTable;
 
-//UNSURE IF LINKED LIST IS NEEDED: TESTING
+//UNSURE IF LINKED LIST IS BETTER THAN having order value in HashTable
 /*
 typedef struct Node{
     void *data;
@@ -111,6 +114,8 @@ void LinkedList_free(List *list){
 */
 //create global HashTable for local_vars
 HashTable *local_vars;
+
+int local_insertions;
 //hash function, I honestly have no idea why this is such a good hash function but it is apparently very good
 // djb2 by Daniel Bernstein: http://www.cse.yorku.ca/~oz/hash.html
 
@@ -129,7 +134,7 @@ unsigned long get_bucket(HashTable *h, char *key) {
 }
 
 HashTable *HashTable_new() {
-    int nBuckets = 100;
+    int nBuckets = 50;
     HashTable *h = malloc(sizeof(HashTable));
     if (h == NULL){
         exit(EXIT_FAIL);
@@ -140,6 +145,52 @@ HashTable *HashTable_new() {
         exit(EXIT_FAIL);
     }
     return h;
+}
+
+void HashTable_free(HashTable *h) {
+    for (int i = 0; i < h->nBuckets; i++) {
+        Entry *v = h->buckets[i];
+        while (v != NULL) {
+            Entry *next = v->next;
+            free(v->key);
+            free(v);
+            v = next;
+        }
+    }
+    free(h->buckets);
+    free(h);
+}
+
+HashTable *resize_hash_table(HashTable *h){
+    int newNBuckets = h->nBuckets * 2;
+    HashTable *newh = malloc(sizeof(HashTable));
+    if (newh == NULL){
+        exit(EXIT_FAIL);
+    }
+    newh->nBuckets = newNBuckets;
+    newh->buckets = calloc(newNBuckets, sizeof(Entry *));
+    if (newh->buckets == NULL){
+        exit(EXIT_FAIL);
+    }
+    for (int i = 0; i < h->nBuckets; i++){
+        Entry *v = h->buckets[i];
+        while (v != NULL) {
+            unsigned long bucket = get_bucket(newh, v->key);
+
+            Entry *newVal = malloc(sizeof(Entry));
+            if (newVal == NULL){
+                exit(EXIT_FAIL);
+            }
+            newVal->key = strdup(v->key);
+            newVal->value = v->value;
+            newVal->order = v->order;
+            newh->buckets[bucket] = newVal;
+            v = v->next;
+        }
+    }
+    HashTable_free(h);
+    local_vars = newh;
+    return newh;
 }
 
 void HashTable_set(HashTable *h, char *key, void *val) {
@@ -153,6 +204,11 @@ void HashTable_set(HashTable *h, char *key, void *val) {
         v = v->next;
     }
 
+    if (((double)local_insertions / (double)h->nBuckets) >= LOAD_THRESHOLD) {
+        h = resize_hash_table(h);
+        bucket = get_bucket(h,key);
+    }
+
     Entry *newVal = malloc(sizeof(Entry));
     if (newVal == NULL){
         exit(EXIT_FAIL);
@@ -164,9 +220,8 @@ void HashTable_set(HashTable *h, char *key, void *val) {
     }
     newVal->value = val;
     newVal->next = h->buckets[bucket];
+    newVal->order = local_insertions++;
     h->buckets[bucket] = newVal;
-    printf("'%s' : '%s'\n", newVal->key, newVal->value);
-    printf("'%s' : '%s'\n", h->buckets[bucket]->key, h->buckets[bucket]->value);
 }
 
 void *HashTable_get(HashTable *h, char *key) {
@@ -215,25 +270,133 @@ void printHashTable(HashTable *h){
     }
 }
 
-void HashTable_free(HashTable *h) {
-    for (int i = 0; i < h->nBuckets; i++) {
-        Entry *v = h->buckets[b];
-        while (v != NULL) {
-            Entry *next = v->next;
-            free(v->key);
-            free(v);
-            v = next;
-        }
-    }
-    free(h->buckets);
-    free(h);
-}
-
 
 //////////////////////////////////////////////////////////////////////////////////
 ///                         HASH TABLE END                                     ///
 /////////////////////////////////////////////////////////////////////////////////
 
+
+//////////////////////////////////////////////////////////////////////////////////
+///                         CIRCULAR Queue Start                               ///
+/////////////////////////////////////////////////////////////////////////////////
+
+
+typedef struct queue {
+    char **command;
+    int head, tail, num_entries, size;
+} queue;
+
+//GLOBAL SET for HISTORY
+queue *history;
+
+queue *init_queue(int max_size) {
+    queue *q = malloc(sizeof(queue));
+    if (q == NULL){
+        exit(EXIT_FAIL);
+    }
+    q->size = max_size;
+    q->command = (char **)malloc(q->size * sizeof(char *));
+    if (q->command == NULL){
+        exit(EXIT_FAIL);
+    }
+    q->num_entries = 0;
+    q->head = 0;
+    q->tail = 0;
+    return q;
+}
+
+int queue_empty(queue *q){
+    return (q->num_entries == 0);
+}
+
+int queue_full(queue *q){
+    return (q->num_entries == q->size);
+}
+
+void queue_destroy(queue *q) {
+    free(q->command);
+    free(q);
+}
+
+char *dequeue(queue *q){
+    char *result;
+
+    if (queue_empty(q)){
+        return NULL;
+    }
+
+    result = q->command[q->head];
+    q->head = (q->head + 1) % q->size;
+    q->num_entries--;
+
+    return result;
+}
+
+int enqueue(queue *q, char *value) {
+    
+    if (queue_full(q)) {
+        dequeue(q);        
+    }
+    q->command[q->tail] = value;
+    q->num_entries++;
+    q->tail = (q->tail + 1) % q->size;
+    return 1;
+}
+
+queue *resize_queue(queue *q, int new_size){
+    queue *new_queue = init_queue(new_size);
+
+    int count = 0;
+    int num_vals = q->num_entries;
+    while (count < num_vals){
+        enqueue(new_queue, dequeue(q));
+        count++;
+    }
+
+    queue_destroy(q);
+
+    return new_queue;
+}
+
+void display_queue(queue *q){
+    int i = q->tail - 1;
+    if (i < 0) {
+        i += q->size;
+    }
+    int count = 0;
+
+    while (count < q->num_entries){
+        printf("%d) %s\n",count + 1, q->command[i]);
+        i = (i - 1 + q->size) % q->size;
+        count++;
+    }
+}
+
+char *get_queue(queue *q, int n){
+    if (queue_empty(q)){
+        return NULL;
+    }
+    int i = q->tail -1;
+    if (i < 0) {
+        i += q->size;
+    }
+    int count = 0;
+    while (count < q->num_entries){
+        if (count + 1 == n){
+            return q->command[i];
+        }else{
+            i = (i - 1 + q->size) % q->size;
+            count++;
+        }
+    }
+    return NULL;
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////////
+///                         CIRCULAR Queue END                                ///
+/////////////////////////////////////////////////////////////////////////////////
 
 void do_piping(int pipe_in, int pipe_out) {
     if (pipe_in != NO_PIPE) {
@@ -261,6 +424,8 @@ int main(int argc, char *argv[])
         exit(EXIT_FAIL);
     }
 
+    history = init_queue(DEFAULT_HIST_LENGTH);
+
     while(1)
     {
         char *string = NULL;
@@ -275,13 +440,15 @@ int main(int argc, char *argv[])
         input_read = getline(&string, &size, stdin);
         
         //eof input
-        if (input_read == -1){
+        if (input_read == -1 ){
             printf("\n");
             free(string);
             exit(0);
         }
         string[input_read - 1] = '\0';
 
+        //REMEMBER TO FREE THIS
+        char *input_string = strdup(string);
         char *temp = string;
 
         token = strsep(&temp, "|");
@@ -324,11 +491,15 @@ int main(int argc, char *argv[])
                 if (strcmp(command, "") != 0) {
                     //handle shell var
                     if (command[0] == '$'){
-                        command = getenv(++command);
-                        if (command == NULL){
-                            //add local here once local is working
-                            command = "\0";
+                        char *temp;
+                        temp = getenv(++command);
+                        if (temp == NULL){
+                            temp = HashTable_get(local_vars, command);
+                            if (temp == NULL){
+                                temp = "\0";
+                            }
                         }
+                        command = temp;
                     }
                     args[num_args++] = command;
                 }
@@ -349,8 +520,16 @@ int main(int argc, char *argv[])
                 }
             }
 
-            if (built_in_flag) break;
-            
+            if (built_in_flag){
+                break;
+            }else{
+                char *recent_cmd = get_queue(history, 1);
+                if (queue_empty(history)){
+                    enqueue(history, input_string);
+                }else if (recent_cmd != NULL && strcmp(get_queue(history, 1),input_string) != 0){
+                    enqueue(history, input_string);
+                }
+            }
 
             int pid = fork();
             if (pid == 0){
@@ -379,8 +558,6 @@ int main(int argc, char *argv[])
             }
             free(args);
         }
-        close(pipefds[num_pipes-1][0]);
-        close(pipefds[num_pipes-1][1]);
         for (int i = 0; i < num_pipes; i++) {
            wait(NULL);
         }
@@ -435,8 +612,12 @@ void export_command(char **args){
 }
 
 void local_command(char **args){
+    if (args [1] == NULL || args[2] != NULL){
+        exit(EXIT_FAIL);
+    }
     if (local_vars == NULL){
         local_vars = HashTable_new();
+        local_insertions = 0;
         if (local_vars == NULL){
             exit(EXIT_FAIL);
         }
@@ -453,12 +634,168 @@ void local_command(char **args){
     if(strcmp(local_value, "") == 0){
         HashTable_delete(local_vars,local_name);
     }else {
-        HashTable_set(local_vars, local_name, local_value);
+        HashTable_set(local_vars, strdup(local_name), strdup(local_value));
     }
     free(input_copy);
 }
 
 
 void vars_command(char **args){
-   printHashTable(local_vars); 
+    if (args[1] != NULL){
+        exit(EXIT_FAIL);
+    }
+    if (local_vars == NULL){
+        return;
+    }
+    int hash_size = local_vars->nBuckets;
+
+    char *local_list[hash_size];
+    //without this loop I get free(): invalid pointer error
+    for (int i = 0; i < hash_size; i++) {
+        local_list[i] = ""; // Set each pointer to an empty string
+    }
+
+    for (int i = 0; i < hash_size; i++){
+        Entry *v = local_vars->buckets[i];
+        while (v != NULL){
+            
+            int index = v->order;
+            int name_len = strlen(v->key);
+            int value_len = strlen(v->value);
+            int max_length = name_len + value_len + 10;
+            //256 for now idk if this is good
+            local_list[index] = (char *)malloc(max_length * sizeof(char));
+
+            if (local_list[index] == NULL){
+                exit(EXIT_FAIL);
+            }
+
+            snprintf(local_list[index], max_length, "%s=%s", v->key, v->value);
+
+            v = v->next;
+        }
+    }
+
+    for (int i = 0; i < hash_size; i++){
+        if (strcmp(local_list[i], "") != 0){
+            printf("%s\n",local_list[i]);
+            free(local_list[i]);
+        }
+    }
+}
+
+
+void history_command(char **args){
+    if (args[1] == NULL){
+        display_queue(history);
+    }else if (strcmp(args[1], "set") == 0){
+        history = resize_queue(history, atoi(args[2]));
+    }else if (args[1] != NULL){
+        int n = atoi(args[1]);
+        if (n > history->size){
+            return;
+        }
+        char *history_command = get_queue(history, n);
+        if (history_command == NULL){
+            return;
+        }
+
+        //2/17/2024 THIS FOLLOWING PIECE OF CODE IS DISGUSTING(but it works), REFACTOR IF FINISH OTHER HW
+        
+        char *token;
+        char **commands = malloc(INITIAL_ALLOC_SIZE * sizeof(char*));
+        int num_pipes = 0;
+        int max_pipes = INITIAL_ALLOC_SIZE;
+
+
+        char *temp = history_command;
+
+        token = strsep(&temp, "|");
+       
+        while(token != NULL) {
+            if (num_pipes >= max_pipes){
+                max_pipes *= INCREMENT_SIZE_MULTIPLE;
+                commands = realloc(commands, max_pipes * sizeof(char*));
+                if (!commands) {
+                    exit(EXIT_FAIL);
+                }
+            }
+            commands[num_pipes++] = token;
+            token = strsep(&temp, "|");
+        }
+        commands[num_pipes] = NULL;
+
+        int pipefds[num_pipes - 1][2];
+        for (int i = 0; i < num_pipes - 1 ; i++) {
+            if (pipe(pipefds[i]) == -1) {
+                exit(EXIT_FAIL);
+            }
+        }
+        
+        char **temp_commands = commands;
+        for (int i = 0; i < num_pipes; i++) {
+            char **args = malloc(INITIAL_ALLOC_SIZE * sizeof(char*));
+            int max_args = INITIAL_ALLOC_SIZE;
+            char *command = strsep(&temp_commands[i], " ");
+            int num_args = 0;
+            while (command != NULL){
+                if (num_args >= max_args) {
+                    max_args *= INCREMENT_SIZE_MULTIPLE;
+                    args = realloc(args, max_args * sizeof(char*));
+                    if (!args) {
+                        exit(EXIT_FAIL);
+                    }
+                }
+                if (strcmp(command, "") != 0) {
+                    if (command[0] == '$'){
+                        char *temp;
+                        temp = getenv(++command);
+                        if (temp == NULL){
+                            temp = HashTable_get(local_vars, command);
+                            if (temp == NULL){
+                                temp = "\0";
+                            }
+                        }
+                        command = temp;
+                    }
+                    args[num_args++] = command;
+                }
+
+                command = strsep(&temp_commands[i], " ");
+            }
+            args[num_args] = NULL;
+
+            int pid = fork();
+            if (pid == 0){
+                if (num_pipes - 1 > 0){
+                    if(i == 0){
+                        close(pipefds[i][0]);
+                        do_piping(NO_PIPE, pipefds[i][1]);
+                        close(pipefds[i][1]);
+                    }else if (i > 0 && i < num_pipes - 1) {
+                        close(pipefds[i-1][1]);
+                        close(pipefds[i][0]);
+                        do_piping(pipefds[i-1][0], pipefds[i][1]);
+                    }else if (i == num_pipes - 1) {
+                        do_piping(pipefds[i-1][0], NO_PIPE);
+                        close(pipefds[i-1][1]);
+                        close(pipefds[i-1][0]);
+                    }
+                }
+                execvp(args[0], args);
+            }else {
+                //need to close previous pipe, if have a new one
+                if (i > 0){
+                    close(pipefds[i-1][0]);
+                    close(pipefds[i-1][1]);
+                }
+            }
+            free(args);
+        }
+        for (int i = 0; i < num_pipes; i++) {
+            wait(NULL);
+        }
+        free(commands);
+    }
+    return;
 }
