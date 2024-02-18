@@ -333,8 +333,11 @@ char *dequeue(queue *q){
 }
 
 int enqueue(queue *q, char *value) {
-    
+     
     if (queue_full(q)) {
+        if (q->size == 0){
+            return 1;
+        }
         dequeue(q);        
     }
     q->command[q->tail] = value;
@@ -345,6 +348,9 @@ int enqueue(queue *q, char *value) {
 
 queue *resize_queue(queue *q, int new_size){
     queue *new_queue = init_queue(new_size);
+    if (new_size == 0){
+        return new_queue;
+    }
 
     int count = 0;
     int num_vals = q->num_entries;
@@ -441,7 +447,7 @@ int main(int argc, char *argv[])
         
         //eof input
         if (input_read == -1 ){
-            printf("\n");
+//            printf("\n");
             free(string);
             exit(0);
         }
@@ -494,14 +500,20 @@ int main(int argc, char *argv[])
                         char *temp;
                         temp = getenv(++command);
                         if (temp == NULL){
-                            temp = HashTable_get(local_vars, command);
-                            if (temp == NULL){
-                                temp = "\0";
+                            if (local_vars == NULL){
+                                temp = "";
+                            } else{
+                                temp = HashTable_get(local_vars, command);
+                                if (temp == NULL){
+                                    temp = "";
+                                }
                             }
                         }
                         command = temp;
                     }
-                    args[num_args++] = command;
+                    if (strcmp(command, "") != 0){
+                        args[num_args++] = command;
+                    }
                 }
 
                 command = strsep(&temp_commands[i], " ");
@@ -549,6 +561,11 @@ int main(int argc, char *argv[])
                     }
                 }
                 execvp(args[0], args);
+                printf("execvp: No such file or directory\n");
+                //why are we exit failing here, based on test I do, but
+                //to me makes more sense to just continue giving prompts
+                exit(EXIT_FAIL);
+
             }else {
                 //need to close previous pipe, if have a new one
                 if (i > 0){
@@ -751,14 +768,20 @@ void history_command(char **args){
                         char *temp;
                         temp = getenv(++command);
                         if (temp == NULL){
-                            temp = HashTable_get(local_vars, command);
-                            if (temp == NULL){
-                                temp = "\0";
+                            if (local_vars == NULL){
+                                temp = "";
+                            } else{
+                                temp = HashTable_get(local_vars, command);
+                                if (temp == NULL){
+                                    temp = "";
+                                }
                             }
                         }
                         command = temp;
                     }
-                    args[num_args++] = command;
+                    if (strcmp(command, "") != 0){
+                        args[num_args++] = command;
+                    }
                 }
 
                 command = strsep(&temp_commands[i], " ");
@@ -797,5 +820,4 @@ void history_command(char **args){
         }
         free(commands);
     }
-    return;
 }
