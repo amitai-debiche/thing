@@ -422,12 +422,22 @@ void do_piping(int pipe_in, int pipe_out) {
 int main(int argc, char *argv[])
 {
     //create file pointer and replace stdin
+    FILE *input;
+    int batch_flag = 0;
     //TODO: IMPLEMENT NUMBER OF ARGS CHECKED, IF ARG == 2, HANDLE SCRIPT CASE
-    if (argc == 2){
+    if (argc > 2){
         //handle script
-    }
-    else if (argc > 2) {
         exit(EXIT_FAIL);
+    }
+    else if (argc == 2) {
+        input = fopen(argv[1], "r");
+        if (input == NULL){
+            exit(EXIT_FAIL);
+        }
+        fseek(input, 0, SEEK_SET);
+        batch_flag = 1;
+    } else{
+        input = stdin;
     }
 
     history = init_queue(DEFAULT_HIST_LENGTH);
@@ -442,8 +452,11 @@ int main(int argc, char *argv[])
         int num_pipes = 0;
         int max_pipes = INITIAL_ALLOC_SIZE;
 
-        printf("wsh> ");
-        input_read = getline(&string, &size, stdin);
+        if (!batch_flag){
+            printf("wsh> ");
+        }
+        input_read = getline(&string, &size, input);
+
         
         //eof input
         if (input_read == -1 ){
