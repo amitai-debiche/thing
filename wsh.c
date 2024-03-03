@@ -148,6 +148,7 @@ HashTable *HashTable_new() {
 }
 
 void HashTable_free(HashTable *h) {
+    
     for (int i = 0; i < h->nBuckets; i++) {
         Entry *v = h->buckets[i];
         while (v != NULL) {
